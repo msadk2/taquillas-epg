@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 
-import os
 import sys
-import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
-BASE_URL = os.getenv("XUI_BASE_URL", "https://flexgo.xyz:443").rstrip("/")
-USERNAME = os.getenv("XUI_USERNAME", "").strip()
-PASSWORD = os.getenv("XUI_PASSWORD", "").strip()
+SOURCE_EPG_URL = (
+    "http://5.161.119.253/"
+    "Immunity3-Viewing5-Extruding3-Fructose7-Steam4-Bloating8-"
+    "Roman8-Remedial5-Frays5/epg.xml"
+)
 
 OUTPUT = Path("public/epg.xml")
+
 
 TAQUILLAS = {
     "83278": "Taquilla Acción",
@@ -32,26 +33,21 @@ TAQUILLAS = {
 }
 
 
-if not USERNAME or not PASSWORD:
-    sys.exit("Faltan XUI_USERNAME y/o XUI_PASSWORD en los Secrets de GitHub.")
-
-
-params = urllib.parse.urlencode({
-    "username": USERNAME,
-    "password": PASSWORD
-})
-
-url = f"{BASE_URL}/xmltv.php?{params}"
-
-print("Descargando EPG completo de XUI...")
+print("Descargando EPG externo...")
 
 request = urllib.request.Request(
-    url,
-    headers={"User-Agent": "SpinningTV-EPG/1.0"}
+    SOURCE_EPG_URL,
+    headers={
+        "User-Agent": "Mozilla/5.0 SpinningTV-EPG/1.0"
+    }
 )
 
-with urllib.request.urlopen(request, timeout=90) as response:
-    data = response.read()
+try:
+    with urllib.request.urlopen(request, timeout=120) as response:
+        data = response.read()
+
+except Exception as error:
+    sys.exit(f"Error descargando el EPG: {error}")
 
 
 if not data:
@@ -60,6 +56,7 @@ if not data:
 
 try:
     source_root = ET.fromstring(data)
+
 except ET.ParseError as error:
     sys.exit(f"El XML recibido no es válido: {error}")
 
@@ -68,13 +65,16 @@ target_root = ET.Element(
     "tv",
     {
         "generator-info-name": "SpinningTV Taquillas EPG",
-        "source-info-name": "XUI.one"
+        "source-info-name": "EPG Taquillas"
     }
 )
 
 
-selected_channels = {}
+# --------------------------------------------------
+# CANALES
+# --------------------------------------------------
 
+source_channels = {}
 
 for channel in source_root.findall("channel"):
 
@@ -83,22 +83,11 @@ for channel in source_root.findall("channel"):
     if channel_id not in TAQUILLAS:
         continue
 
-    expected_name = TAQUILLAS[channel_id].casefold()
-
-    display_name = (
-        channel.findtext("display-name") or ""
-    ).strip()
-
-    if channel_id not in selected_channels:
-        selected_channels[channel_id] = channel
-
-    if display_name.casefold() == expected_name:
-        selected_channels[channel_id] = channel
+    if channel_id not in source_channels:
+        source_channels[channel_id] = channel
 
 
-for channel_id, expected_name in TAQUILLAS.items():
-
-    source_channel = selected_channels.get(channel_id)
+for channel_id, channel_name in TAQUILLAS.items():
 
     new_channel = ET.SubElement(
         target_root,
@@ -109,7 +98,9 @@ for channel_id, expected_name in TAQUILLAS.items():
     ET.SubElement(
         new_channel,
         "display-name"
-    ).text = expected_name
+    ).text = channel_name
+
+    source_channel = source_channels.get(channel_id)
 
     if source_channel is not None:
 
@@ -124,7 +115,16 @@ for channel_id, expected_name in TAQUILLAS.items():
             )
 
 
+# --------------------------------------------------
+# PROGRAMACIÓN
+# --------------------------------------------------
+
 programme_count = 0
+
+programme_by_channel = {
+    channel_id: 0
+    for channel_id in TAQUILLAS
+}
 
 
 for programme in source_root.findall("programme"):
@@ -137,15 +137,32 @@ for programme in source_root.findall("programme"):
     target_root.append(programme)
 
     programme_count += 1
+    programme_by_channel[channel_id] += 1
+
+
+print("")
+print("Programas encontrados:")
+
+for channel_id, channel_name in TAQUILLAS.items():
+
+    count = programme_by_channel[channel_id]
+
+    print(
+        f"{channel_name}: {count}"
+    )
 
 
 if programme_count == 0:
 
     sys.exit(
-        "No se encontró programación para las 14 taquillas. "
-        "No se genera el EPG."
+        "No se encontró ninguna programación "
+        "para las 14 taquillas."
     )
 
+
+# --------------------------------------------------
+# GUARDAR XML
+# --------------------------------------------------
 
 OUTPUT.parent.mkdir(
     parents=True,
@@ -157,7 +174,11 @@ tree = ET.ElementTree(target_root)
 
 
 try:
-    ET.indent(tree, space="  ")
+    ET.indent(
+        tree,
+        space="  "
+    )
+
 except AttributeError:
     pass
 
@@ -169,8 +190,19 @@ tree.write(
 )
 
 
+print("")
 print(
-    f"EPG generado correctamente: "
-    f"{len(TAQUILLAS)} canales y "
-    f"{programme_count} programas."
+    f"EPG generado correctamente."
+)
+
+print(
+    f"Canales: {len(TAQUILLAS)}"
+)
+
+print(
+    f"Programas: {programme_count}"
+)
+
+print(
+    f"Archivo: {OUTPUT}"
 )
